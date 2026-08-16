@@ -1,0 +1,144 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile information.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 128
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Profile picture URL",
+          "maxLength": 500
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "description": "Timestamp of latest login",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Account registration timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "email", "createdAt", "lastLoginAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "A chat conversation session containing user and AI interactions.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique session identifier",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the owner user",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the conversation",
+          "maxLength": 100
+        },
+        "model": {
+          "type": "string",
+          "description": "Selected model identifier",
+          "maxLength": 64
+        },
+        "reasoningLevel": {
+          "type": "string",
+          "description": "Reasoning power level",
+          "enum": ["standard", "mid", "max"]
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        },
+        "messageCount": {
+          "type": "number",
+          "description": "Total message count in the conversation"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Serialized message payload array"
+        }
+      },
+      "required": ["id", "userId", "title", "model", "createdAt", "updatedAt"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "User feedback and issue reports.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the submitter",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email address of user",
+          "maxLength": 128
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of feedback",
+          "maxLength": 64
+        },
+        "rating": {
+          "type": "number",
+          "description": "Star or score rating (1-5)"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Feedback message",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Submission timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["category", "comment", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile directory"
+    },
+    "/conversations/{conversationId}": {
+      "schema": "Conversation",
+      "description": "Saved conversations of users"
+    },
+    "/feedbacks/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "User feedback submissions"
+    }
+  }
+}

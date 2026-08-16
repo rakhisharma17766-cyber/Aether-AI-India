@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net: Default Deny All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity Validators
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 128 &&
+             data.createdAt is string && data.createdAt.size() <= 64 &&
+             data.lastLoginAt is string && data.lastLoginAt.size() <= 64 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500));
+    }
+
+    function isValidConversation(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() <= 100 &&
+             data.model is string && data.model.size() <= 64 &&
+             data.createdAt is string && data.createdAt.size() <= 64 &&
+             data.updatedAt is string && data.updatedAt.size() <= 64 &&
+             (!('messageCount' in data) || (data.messageCount is number && data.messageCount >= 0 && data.messageCount <= 5000)) &&
+             (!('messages' in data) || (data.messages is list && data.messages.size() <= 500)) &&
+             (!('reasoningLevel' in data) || (data.reasoningLevel in ['standard', 'mid', 'max']));
+    }
+
+    function isValidFeedback(data) {
+      return data.category is string && data.category.size() <= 64 &&
+             data.comment is string && data.comment.size() <= 2000 &&
+             data.createdAt is string && data.createdAt.size() <= 64 &&
+             (!('rating' in data) || (data.rating is number && data.rating >= 1 && data.rating <= 5)) &&
+             (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
+             (!('userEmail' in data) || (data.userEmail is string && data.userEmail.size() <= 128));
+    }
+
+    // Test connection endpoint for initialization
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Users Collection (PII Isolated - strictly self-access only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      
+      allow create: if isValidId(userId) && isOwner(userId) &&
+        isValidUser(incoming()) && incoming().uid == request.auth.uid;
+
+      allow update: if isValidId(userId) && isOwner(userId) &&
+        isValidUser(incoming()) && incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt;
+
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    // Conversations Collection (Session & message persistence)
+    match /conversations/{conversationId} {
+      allow get: if isValidId(conversationId) && (
+        resource.data.userId == 'anonymous' ||
+        (isSignedIn() && resource.data.userId == request.auth.uid)
+      );
+      
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        (
+          incoming().userId == 'anonymous' ||
+          (isSignedIn() && incoming().userId == request.auth.uid)
+        );
+
+      allow update: if isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        (
+          resource.data.userId == 'anonymous' ||
+          (isSignedIn() && resource.data.userId == request.auth.uid && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt)
+        );
+
+      allow delete: if isValidId(conversationId) && (
+        resource.data.userId == 'anonymous' ||
+        (isSignedIn() && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // Feedbacks Collection (Submission Allowed, listing restricted)
+    match /feedbacks/{feedbackId} {
+      allow create: if isValidId(feedbackId) &&
+        isValidFeedback(incoming());
+      
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if false; // Deny blanket listing of feedback PII
+    }
+  }
+}

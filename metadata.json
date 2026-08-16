@@ -1,0 +1,6 @@
+{
+  "name": "Aether AI",
+  "description": "Futuristic Glassmorphic HUD AI workstation powered by Gemini multimodal vision, thinking engine, live voice synthesis, image generation, and Firebase Google Sign-In data persistence with 60-day auto-purge retention.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
