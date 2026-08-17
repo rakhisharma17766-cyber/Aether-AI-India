@@ -2,6 +2,8 @@ import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
   signOut as fbSignOut,
   onAuthStateChanged,
@@ -21,7 +23,6 @@ import {
   deleteDoc,
   query,
   where,
-  orderBy,
   Firestore,
   getDocFromServer,
 } from 'firebase/firestore';
@@ -63,13 +64,31 @@ const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) 
 // CRITICAL: The app will break without specifying firestoreDatabaseId
 export const db: Firestore = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth: Auth = getAuth(app);
-export const googleAuthProvider = new GoogleAuthProvider();
 
-// Ensure local persistence for browser sessions
+export const googleAuthProvider = new GoogleAuthProvider();
+googleAuthProvider.setCustomParameters({
+  prompt: 'select_account',
+});
+
+// Configure Firebase Auth persistence to local state to prevent logout on page reload
 if (typeof window !== 'undefined') {
   setPersistence(auth, browserLocalPersistence).catch((err) => {
     console.warn('Firebase setPersistence notice:', err);
   });
+}
+
+// Check redirect login results on startup
+if (typeof window !== 'undefined') {
+  getRedirectResult(auth)
+    .then((result) => {
+      if (result?.user) {
+        saveCachedAuthUser(result.user);
+        syncUserProfile(result.user).catch(() => {});
+      }
+    })
+    .catch((err) => {
+      console.warn('Redirect result notice:', err);
+    });
 }
 
 export interface CachedAuthUser {
@@ -91,7 +110,7 @@ export function getCachedAuthUser(): CachedAuthUser | null {
   }
 }
 
-export function saveCachedAuthUser(user: User | null): void {
+export function saveCachedAuthUser(user: User | CachedAuthUser | null): void {
   if (typeof window === 'undefined') return;
   try {
     if (user && !user.isAnonymous) {
@@ -100,7 +119,7 @@ export function saveCachedAuthUser(user: User | null): void {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        isAnonymous: user.isAnonymous,
+        isAnonymous: user.isAnonymous || false,
       };
       localStorage.setItem('aether_auth_user', JSON.stringify(cached));
     } else {
@@ -223,25 +242,96 @@ export async function syncUserProfile(user: User): Promise<void> {
   }
 }
 
-// Auth operations
+// Auth operations using signInWithPopup with GoogleAuthProvider & local persistence
 export async function loginWithGoogle(): Promise<User | null> {
   try {
+    if (typeof window !== 'undefined') {
+      await setPersistence(auth, browserLocalPersistence);
+    }
     const result = await signInWithPopup(auth, googleAuthProvider);
-    if (result.user) {
+    if (result?.user) {
       saveCachedAuthUser(result.user);
       await syncUserProfile(result.user);
-      // Run automatic 60-day purge upon successful authentication
       purgeExpiredData(result.user).catch((e) => console.warn('60-day cleanup notice:', e));
+      return result.user;
     }
-    return result.user;
+    return null;
+  } catch (err: any) {
+    console.warn('Google Popup sign in failed, attempting redirect or anonymous backup:', err?.code, err?.message);
+    
+    // In environments where popups are blocked by Chrome / Cross-Origin-Opener-Policy
+    if (
+      err?.code === 'auth/popup-blocked' ||
+      err?.code === 'auth/cancelled-popup-request' ||
+      err?.code === 'auth/cross-origin-opener-policy-blocked'
+    ) {
+      try {
+        await signInWithRedirect(auth, googleAuthProvider);
+        return null;
+      } catch (redirectErr) {
+        console.warn('Redirect sign-in notice:', redirectErr);
+      }
+    }
+
+    // If popup/redirect is prevented by iframe domain restrictions, ensure anonymous auth with local operator state
+    if (!auth.currentUser) {
+      try {
+        const anonRes = await signInAnonymously(auth);
+        if (anonRes.user) {
+          saveCachedAuthUser(anonRes.user);
+          return anonRes.user;
+        }
+      } catch (anonErr) {
+        console.warn('Anonymous fallback notice:', anonErr);
+      }
+    }
+
+    if (auth.currentUser) {
+      return auth.currentUser;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Connect with Operator Email to immediately link and sync multi-device chats
+ */
+export async function loginWithOperatorEmail(email: string, displayName?: string): Promise<User | null> {
+  try {
+    let currentUser = auth.currentUser;
+    if (!currentUser) {
+      const anon = await signInAnonymously(auth);
+      currentUser = anon.user;
+    }
+
+    if (currentUser) {
+      const customUser: CachedAuthUser = {
+        uid: currentUser.uid,
+        email: email.trim(),
+        displayName: displayName || email.split('@')[0] || 'Operator',
+        photoURL: '',
+        isAnonymous: false,
+      };
+      saveCachedAuthUser(customUser);
+
+      // Sync to Firestore
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      await setDoc(
+        userDocRef,
+        {
+          uid: currentUser.uid,
+          email: customUser.email,
+          displayName: customUser.displayName,
+          createdAt: new Date().toISOString(),
+          lastLoginAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    }
+    return currentUser;
   } catch (err) {
-    console.warn('Google Popup sign in fallback to anonymous session', err);
-    try {
-      const anonResult = await signInAnonymously(auth);
-      return anonResult.user;
-    } catch {
-      return null;
-    }
+    console.warn('Operator email login notice:', err);
+    return auth.currentUser;
   }
 }
 
@@ -294,7 +384,7 @@ export async function saveConversation(conv: Conversation, user?: User | null): 
   }
 
   // If Firebase Firestore is active and user is logged in
-  if (db && user) {
+  if (db && user && !user.isAnonymous) {
     const path = `conversations/${conv.id}`;
     const sanitizedMessages = sanitizeMessagesForFirestore(conv.messages || []);
 
@@ -302,7 +392,8 @@ export async function saveConversation(conv: Conversation, user?: User | null): 
       await setDoc(doc(db, 'conversations', conv.id), {
         id: conv.id,
         userId: user.uid,
-        title: (conv.title || 'New Transmission').slice(0, 100),
+        userEmail: user.email || '',
+        title: (conv.title || 'New Transmission').slice(0, 200),
         model: (conv.model || 'gemini-3.7-flash').slice(0, 64),
         reasoningLevel: conv.reasoningLevel || 'standard',
         createdAt: new Date(conv.createdAt || Date.now()).toISOString(),
@@ -320,23 +411,24 @@ export async function saveConversation(conv: Conversation, user?: User | null): 
   }
 }
 
-// Load saved conversations
+// Load saved conversations across devices & users
 export async function loadConversations(user?: User | null): Promise<Conversation[]> {
   const localList = getSavedConversationsFromLocal();
 
   if (db && user && !user.isAnonymous) {
     const path = 'conversations';
     try {
+      // Query without server-side orderBy to avoid missing composite index errors on Firestore
       const q = query(
         collection(db, path),
-        where('userId', '==', user.uid),
-        orderBy('updatedAt', 'desc')
+        where('userId', '==', user.uid)
       );
       const snapshot = await getDocs(q);
-      const remoteList: Conversation[] = [];
+      const remoteMap = new Map<string, Conversation>();
+
       snapshot.forEach((d) => {
         const data = d.data();
-        remoteList.push({
+        remoteMap.set(data.id || d.id, {
           id: data.id || d.id,
           title: data.title || 'Untitled Session',
           createdAt: new Date(data.createdAt || Date.now()).getTime(),
@@ -346,17 +438,52 @@ export async function loadConversations(user?: User | null): Promise<Conversatio
           messages: data.messages || [],
         });
       });
-      if (remoteList.length > 0) {
-        // Update local cache
-        localStorage.setItem('aether_conversations', JSON.stringify(remoteList));
-        return remoteList;
+
+      // If user has email, also query by userEmail to restore chats across devices or re-auths
+      if (user.email) {
+        try {
+          const emailQ = query(
+            collection(db, path),
+            where('userEmail', '==', user.email)
+          );
+          const emailSnapshot = await getDocs(emailQ);
+          emailSnapshot.forEach((d) => {
+            const data = d.data();
+            const id = data.id || d.id;
+            if (!remoteMap.has(id)) {
+              remoteMap.set(id, {
+                id,
+                title: data.title || 'Untitled Session',
+                createdAt: new Date(data.createdAt || Date.now()).getTime(),
+                updatedAt: new Date(data.updatedAt || Date.now()).getTime(),
+                model: data.model || 'gemini-3.7-flash',
+                reasoningLevel: data.reasoningLevel || 'standard',
+                messages: data.messages || [],
+              });
+            }
+          });
+        } catch {
+          // Email query optional fallback
+        }
       }
+
+      // Also merge any offline/local conversations that haven't been synced
+      localList.forEach((localConv) => {
+        if (!remoteMap.has(localConv.id)) {
+          remoteMap.set(localConv.id, localConv);
+        }
+      });
+
+      const combinedList = Array.from(remoteMap.values());
+      // Sort in JavaScript memory by updatedAt descending
+      combinedList.sort((a, b) => b.updatedAt - a.updatedAt);
+
+      // Save to localStorage mirror
+      localStorage.setItem('aether_conversations', JSON.stringify(combinedList));
+      return combinedList;
     } catch (error) {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        return localList;
-      }
+      console.warn('Firestore load notice, using local cache:', error);
+      return localList;
     }
   }
 

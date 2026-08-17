@@ -270,7 +270,7 @@ export const PromptInputBar: React.FC<PromptInputBarProps> = ({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Transmit command to Aether (e.g. 'Analyze this system' or 'Create a 4K cyberpunk skyline')..."
+            placeholder="Ask Anything Here"
             className="flex-1 bg-transparent border-0 text-sm md:text-[15px] text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-0 resize-none py-2 px-1 max-h-44 leading-relaxed font-sans"
           />
 

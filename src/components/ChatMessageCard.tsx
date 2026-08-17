@@ -17,6 +17,7 @@ import {
   FileText,
   Clock,
   Zap,
+  Code2,
 } from 'lucide-react';
 import { Message, GeneratedImagePayload } from '../types';
 import { RichMarkdownRenderer } from './RichMarkdownRenderer';
@@ -45,6 +46,10 @@ export const ChatMessageCard: React.FC<ChatMessageCardProps> = ({
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+
+  // Detect code blocks in response
+  const codeBlockMatches = message.content.match(/```[\s\S]*?```/g);
+  const codeBlockCount = codeBlockMatches ? codeBlockMatches.length : 0;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
@@ -145,6 +150,8 @@ export const ChatMessageCard: React.FC<ChatMessageCardProps> = ({
 
     try {
       window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+
       const sanitized = rawText
         .replace(/```[\s\S]*?```/g, '')
         .replace(/`([^`]+)`/g, '$1')
@@ -161,18 +168,25 @@ export const ChatMessageCard: React.FC<ChatMessageCardProps> = ({
       }
 
       const utterance = new SpeechSynthesisUtterance(sanitized);
-      const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(
-        (v) =>
-          v.lang.startsWith('en') &&
-          (v.name.includes('Google') ||
-            v.name.includes('Natural') ||
-            v.name.includes('Samantha') ||
-            v.name.includes('Daniel') ||
-            v.name.includes('Ava') ||
-            v.default)
-      ) || voices.find((v) => v.lang.startsWith('en')) || voices[0];
+      (window as unknown as { _activeAetherUtterance?: SpeechSynthesisUtterance })._activeAetherUtterance = utterance;
 
+      const pickVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        return (
+          voices.find(
+            (v) =>
+              v.lang.startsWith('en') &&
+              (v.name.includes('Google') ||
+                v.name.includes('Natural') ||
+                v.name.includes('Samantha') ||
+                v.name.includes('Daniel') ||
+                v.name.includes('Ava') ||
+                v.default)
+          ) || voices.find((v) => v.lang.startsWith('en')) || voices[0]
+        );
+      };
+
+      const preferredVoice = pickVoice();
       if (preferredVoice) {
         utterance.voice = preferredVoice;
       }
@@ -189,11 +203,13 @@ export const ChatMessageCard: React.FC<ChatMessageCardProps> = ({
       utterance.onend = () => {
         setIsPlayingAudio(false);
         setAudioLoading(false);
+        (window as unknown as { _activeAetherUtterance?: SpeechSynthesisUtterance })._activeAetherUtterance = undefined;
       };
 
       utterance.onerror = () => {
         setIsPlayingAudio(false);
         setAudioLoading(false);
+        (window as unknown as { _activeAetherUtterance?: SpeechSynthesisUtterance })._activeAetherUtterance = undefined;
       };
 
       window.speechSynthesis.speak(utterance);
@@ -234,6 +250,12 @@ export const ChatMessageCard: React.FC<ChatMessageCardProps> = ({
                 {message.modelUsed && (
                   <span className="text-[10px] border border-white/10 px-2 py-0.5 rounded bg-white/5 hud-text text-sky-300 uppercase">
                     {message.modelUsed}
+                  </span>
+                )}
+                {codeBlockCount > 0 && (
+                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] border border-sky-500/30 px-2 py-0.5 rounded bg-sky-500/10 text-sky-300 font-mono" title="Code blocks detected with copy buttons">
+                    <Code2 className="w-3 h-3 text-sky-400" />
+                    <span>{codeBlockCount} {codeBlockCount === 1 ? 'CODE BLOCK' : 'CODE BLOCKS'}</span>
                   </span>
                 )}
               </div>
